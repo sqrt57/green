@@ -1,0 +1,3 @@
+[submodule "pyme"]
+	path = pyme
+	url = git@github.com:sqrt57/pyme.git
