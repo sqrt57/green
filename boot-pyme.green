@@ -1,16 +1,7 @@
+(load "compile/pecoff.green")
 
 (if (not (file-exists? "build"))
   (mkdir "build")
   #f)
 
-(define output (open-binary-output-file "build/abc.bin"))
-
-(define data (string->utf8 "Hello world!"))
-(write-bytevector data output)
-(write-bytevector (bytevector 10) output)
-
-(define data (string->utf8 "And again"))
-(write-bytevector data output)
-(write-bytevector (bytevector 10) output)
-
-(close-port output)
+(write-pecoff "build/abc.exe")
