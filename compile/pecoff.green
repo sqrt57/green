@@ -1,7 +1,7 @@
 (define (write-pecoff filename)
   (define output (open-binary-output-file filename))
 
-  (define signature (bytevector 77 90))
+  (define signature (bytevector 0x4d 0x5a))
   (write-bytevector signature output)
 
   (close-port output))
