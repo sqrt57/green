@@ -1,7 +1,151 @@
 (define (write-pecoff filename)
   (define output (open-binary-output-file filename))
-
-  (define signature (bytevector 0x4d 0x5a))
-  (write-bytevector signature output)
-
+  (write-pecoff-to output)
   (close-port output))
+
+;; File map
+; 0000: MZ DOS header
+; 0040: PE signature
+; 0044: COFF header
+; 0058: optional COFF header
+; 00b8: data directories
+; 0138: sections
+; 0200: code section, length = 0x200
+; 0400: imports section, length = 0x200
+; 0600: readonly data section, length = 0x200
+; 0800: read-write data section, length = 0x200
+; 0a00: end of file
+
+;; Memory map
+; 40 0000: base, headers
+; 40 1000: code section, length = 0x1000
+; 40 2000: imports section, length = 0x1000
+; 40 3000: readonly data section, length = 0x1000
+; 40 4000: read-write data section, length = 0x1000
+; 40 5000: end of image
+
+(define (write-pecoff-to port)
+  (write-bytevector (pecoff-header) port)
+  (write-bytevector (code-section) port)
+  (write-bytevector (imports-section) port)
+  (write-bytevector (rdata-section) port)
+  (write-bytevector (rwdata-section) port))
+
+(define (pecoff-header)
+  (define header (make-bytevector 0x200 0))
+  (bytevector-copy! header 0 (dos-header 0x40))
+  (bytevector-copy! header 0x40 (pe-signature))
+  (bytevector-copy! header 0x44 (coff-header))
+  (bytevector-copy! header 0x58 (coff-header-opt))
+  (bytevector-copy! header 0xb8 (data-directories))
+  (bytevector-copy! header 0x138 (section-headers))
+  header)
+
+(define (dos-header pe-header-offset)
+  (define header (make-bytevector 0x40 0))
+  (bytevector-u8-set! header 0 0x4d)
+  (bytevector-u8-set! header 1 0x5a)
+  (bytevector-u32-le-set! header 0x3c pe-header-offset)
+  header)
+
+(define (pe-signature) (bytevector 0x50 0x45 0 0))
+
+(define (coff-header)
+  (bytevector
+    0x4c 0x01     ; IMAGE_FILE_MACHINE_I386
+    4 0           ; NumberOfSections
+    0 0 0 0       ; TimeDateStamp
+    0 0 0 0       ; PointerToSymbolTable
+    0 0 0 0       ; NumberOfSymbols
+    0xe0 0        ; SizeOfOptionalHeader
+    0x03 0x01))   ; Characteristics = IMAGE_FILE_RELOCS_STRIPPED
+                  ; | IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_32BIT_MACHINE
+
+(define (coff-header-opt)
+  (bytevector
+    0x0b 0x01             ; PE32 magic number
+    0 0                   ; Major and minor linker version
+    0 0 0 0               ; SizeOfCode
+    0 0 0 0               ; SizeOfInitializedData
+    0 0 0 0               ; SizeOfUninitializedData
+    0x00 0x10 0x00 0x00   ; AddressOfEntryPoint
+    0 0 0 0               ; BaseOfCode
+    0 0 0 0               ; BaseOfData
+    0x00 0x00 0x40 0x00   ; ImageBase
+    0x00 0x10 0x00 0x00   ; SectionAlignment
+    0x00 0x02 0x00 0x00   ; FileAlignment
+    5 0 1 0               ; Major and minor OS version = 5.0 (Windows XP)
+    0 0 0 0               ; Major and minor image version
+    5 0 1 0               ; Major and minor subsystem version
+    0 0 0 0               ; Win32VersionValue, reserved
+    0x00 0x50 0x00 0x00   ; SizeOfImage
+    0x00 0x02 0x00 0x00   ; SizeOfHeaders
+    0 0 0 0               ; CheckSum
+    3 0                   ; Subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI
+    0 0                   ; DllCharacteristics
+    0x00 0x00 0x10 0x00   ; SizeOfStackReserve = 1 Mb
+    0x00 0x10 0x00 0x00   ; SizeOfStackCommit  = 64 Kb (one page)
+    0x00 0x00 0x10 0x00   ; SizeOfHeapReserve  = 1 Mb
+    0x00 0x10 0x00 0x00   ; SizeOfHeapCommit   = 64 Kb (one page)
+    0 0 0 0               ; LoaderFlags, reserved
+    0x10 0x00 0x00 0x00)) ; NumberOfRvaAndSizes = 16
+
+(define (data-directories)
+  (bytevector
+    0 0 0 0 0 0 0 0       ; Export table
+    0x00 0x20 0x00 0x00   ; Import table RVA
+    0x28 0x00 0x00 0x00)) ; Import table size
+
+(define (section-headers)
+  (bytevector-append
+    (section-header 0x1000 0x1000 0x200 0x200 0x60000020)
+    (section-header 0x2000 0x1000 0x400 0x200 0x40000040)
+    (section-header 0x3000 0x1000 0x600 0x200 0x40000040)
+    (section-header 0x4000 0x1000 0x800 0x200 0xc0000040)))
+
+(define (section-header virtual-address virtual-size raw-address raw-size characteristics)
+  (define header (make-bytevector 0x28 0))
+  (bytevector-u32-le-set! header 0x08 virtual-size)
+  (bytevector-u32-le-set! header 0x0c virtual-address)
+  (bytevector-u32-le-set! header 0x10 raw-size)
+  (bytevector-u32-le-set! header 0x14 raw-address)
+  (bytevector-u32-le-set! header 0x24 characteristics)
+  header)
+
+(define (code-section)
+  (define section (make-bytevector 0x200 0))
+  (bytevector-copy!
+    section 0
+    (bytevector
+      0xfc                    ; cld
+      0x6a 0x00               ; push 0
+      0xff 0x15               ; call dword ptr
+      0x30 0x20 0x40 0x00))   ; immediate VA of IAT for "ExitProcess"
+  section)
+
+;; Import section map
+; 2000 kernel32.dll import descriptor
+; 2014 zero import descriptor
+; 2028 import name table for kernel32.dll
+; 2030 import address table for kernel32.dll
+; 2038 "kernel32.dll" string
+; 2046 zero hint for "ExitProcess"
+; 2048 "ExitProcess" string
+(define (imports-section)
+  (define section (make-bytevector 0x200 0))
+  (bytevector-copy! section 0 (import-descriptor 0x2038 0x2028 0x2030))
+  (bytevector-u32-le-set! section 0x28 0x2046)
+  (bytevector-u32-le-set! section 0x30 0x2046)
+  (bytevector-copy! section 0x38 (string->utf8 "kernel32.dll"))
+  (bytevector-copy! section 0x48 (string->utf8 "ExitProcess"))
+  section)
+
+(define (import-descriptor name ilt iat)
+  (define descriptor (make-bytevector 0x14 0))
+  (bytevector-u32-le-set! descriptor 0x00 ilt)
+  (bytevector-u32-le-set! descriptor 0x0c name)
+  (bytevector-u32-le-set! descriptor 0x10 iat)
+  descriptor)
+
+(define (rdata-section) (make-bytevector 0x200 0))
+(define (rwdata-section) (make-bytevector 0x200 0))
